@@ -1,0 +1,54 @@
+{
+  "name": "pi-supermemory",
+  "version": "0.2.0",
+  "private": true,
+  "description": "A small, privacy-conscious Supermemory extension for Pi",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Coiggahou2002/pi-supermemory.git" },
+  "homepage": "https://github.com/Coiggahou2002/pi-supermemory#readme",
+  "bugs": { "url": "https://github.com/Coiggahou2002/pi-supermemory/issues" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi-package",
+    "supermemory",
+    "memory"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "verify": "npm run check && npm test"
+  },
+  "dependencies": {
+    "open": "^11.0.4",
+    "openid-client": "^6.8.9",
+    "proper-lockfile": "^4.1.2",
+    "supermemory": "5.1.2",
+    "zod": "^4.3.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "tsx": "^4.20.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.9.0"
+  }
+}
