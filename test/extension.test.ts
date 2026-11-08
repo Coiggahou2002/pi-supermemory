@@ -7,6 +7,7 @@ import { DefaultResourceLoader, ExtensionRunner, ModelRegistry, ModelRuntime, Se
 import { MEMORY_ROUTING_POLICY, registerExtension } from "../src/extension.js";
 import { loadConfig } from "../src/config.js";
 import { fixtureAuthentication } from "./helpers.js";
+import { FileCaptureJournal } from "../src/capture/journal.js";
 import { RECALL_TYPE, SAVE_TOOL, SEARCH_TOOL, type MemoryStore } from "../src/memory.js";
 
 async function harness(autoRecall = true, allowWrites = false, configured = true) {
@@ -22,6 +23,7 @@ async function harness(autoRecall = true, allowWrites = false, configured = true
       saves++;
       return { id: "doc", status: "queued" };
     },
+    async capture(_namespace, batch) { return { id: batch.id, status: "queued" }; },
   };
   const auth = fixtureAuthentication(configured ? "api-key" : "signed-out");
   const loader = new DefaultResourceLoader({
@@ -29,9 +31,11 @@ async function harness(autoRecall = true, allowWrites = false, configured = true
     settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
     extensionFactories: [pi => registerExtension(pi, {
-      config: { apiKey: "fake", namespace: "test-project", autoRecall, allowWrites },
+      config: { apiKey: "fake", namespace: "test-project", autoRecall, autoCapture: false, allowWrites },
       store: configured ? store : undefined,
-      auth,      namespace: async () => "test-project",
+      auth,
+      captureJournal: new FileCaptureJournal(join(directory, "capture")),
+      namespace: async () => "test-project",
     })],
   });
   await loader.reload();
@@ -213,6 +217,38 @@ test("OAuth commands connect in place and logout makes tools require login inste
     const run = await h.recall("记住我喜欢骨架代码");
     assert.match(run.systemPromptOptions.sections.supermemory_memory_policy ?? "", /do not silently switch to local files/);
     assert.equal(h.searches(), 0);
+  } finally { await h.cleanup(); }
+});
+
+test("capture requires distinct informed consent; recall on and manual-write permissions never enable it", async () => {
+  const h = await harness(false, true);
+  try {
+    const command = h.runner.getCommand("supermemory");
+    assert.ok(command);
+    const context = h.runner.createCommandContext();
+    context.waitForIdle = async () => {};
+    await assert.rejects(command.handler("capture on", context), /confirmation/);
+    let approved = false;
+    const confirmations: string[] = [];
+    const notices: string[] = [];
+    h.runner.setUIContext({
+      ...h.runner.getUIContext(), notify: message => { notices.push(message); },
+      confirm: async (_title, message) => { confirmations.push(message); return approved; },
+    }, "tui");
+    await command.handler("on", h.runner.createCommandContext());
+    assert.match(notices.join(), /automatic capture=off/);
+    const interactive = h.runner.createCommandContext();
+    interactive.waitForIdle = async () => {};
+    await command.handler("capture on", interactive);
+    await command.handler("status", interactive);
+    assert.match(notices.at(-1) ?? "", /automatic capture=off/);
+    approved = true;
+    await command.handler("capture on", interactive);
+    assert.match(notices.at(-1) ?? "", /automatic capture=on/);
+    assert.match(confirmations.join(), /Future user text and completed assistant answer text/);
+    assert.match(confirmations.join(), /charges/);
+    await command.handler("capture off", interactive);
+    assert.match(notices.at(-1) ?? "", /automatic capture=off/);
   } finally { await h.cleanup(); }
 });
 

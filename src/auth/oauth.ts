@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import * as oauth from "openid-client";
 import { z } from "zod";
 import { CredentialStorage, ISSUER, RESOURCE, type Credentials } from "./storage.js";
@@ -22,7 +22,8 @@ export interface LoginOptions {
 }
 export interface AuthStatus { kind: "oauth" | "api-key" | "signed-out"; expiresAt?: number }
 export interface Authentication {
-  getToken(): Promise<string>;
+  getToken(expectedCaptureIdentity?: string): Promise<string>;
+  captureIdentity(): Promise<string>;
   status(): Promise<AuthStatus>;
   login(options: LoginOptions): Promise<void>;
   logout(): Promise<{ revoked: boolean }>;
@@ -98,12 +99,21 @@ export class OAuthAuthentication implements Authentication {
     return configuration;
   }
 
+  async captureIdentity(): Promise<string> {
+    const saved = await this.storage.read();
+    if (!saved) throw new AuthenticationRequired();
+    // Bind pending uploads to this explicit authorization grant, not a mutable
+    // active account or rotating access token. Re-login intentionally changes it.
+    return createHash("sha256").update(JSON.stringify({ issuer: saved.issuer, resource: saved.resource, clientId: saved.clientId })).digest("hex");
+  }
+
   async status(): Promise<AuthStatus> {
     const saved = await this.storage.read();
     return saved ? { kind: "oauth", expiresAt: saved.expiresAt } : { kind: "signed-out" };
   }
 
-  getToken(): Promise<string> {
+  getToken(expectedCaptureIdentity?: string): Promise<string> {
+    if (expectedCaptureIdentity) return this.boundToken(expectedCaptureIdentity);
     if (this.closed) return Promise.reject(new Error("Supermemory authentication has shut down; retry in the active session."));
     if (!this.pendingRefresh) {
       // Register the entire read/refresh operation synchronously so immediate
@@ -115,6 +125,17 @@ export class OAuthAuthentication implements Authentication {
       void refresh.then(() => { this.pendingRefresh = undefined; }, () => { this.pendingRefresh = undefined; });
     }
     return this.pendingRefresh;
+  }
+
+  private async boundToken(expectedIdentity: string): Promise<string> {
+    const token = await this.getToken();
+    const saved = await this.storage.read();
+    if (!saved || token !== saved.accessToken) throw new Error("Capture authorization changed; retry after checking the signed-in account.");
+    const identity = createHash("sha256").update(JSON.stringify({ issuer: saved.issuer, resource: saved.resource, clientId: saved.clientId })).digest("hex");
+    if (identity !== expectedIdentity) throw new Error("Capture authorization changed; no content was sent to the new account.");
+    // A concurrent later login cannot turn this already-bound token into a
+    // different account's token; callers retain this exact credential.
+    return token;
   }
 
   private async readOrRefresh(): Promise<string> {

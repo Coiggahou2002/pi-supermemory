@@ -12,6 +12,7 @@ import { RECALL_TYPE, SAVE_TOOL, SEARCH_TOOL } from "../src/memory.js";
 import { OAuthFixture } from "./oauth-fixture.js";
 import { CredentialStorage } from "../src/auth/storage.js";
 import { OAuthAuthentication } from "../src/auth/oauth.js";
+import { FileCaptureJournal } from "../src/capture/journal.js";
 
 const requestSchema = z.object({ messages: z.array(z.object({ role: z.string(), content: z.unknown() }).passthrough()) });
 
@@ -46,6 +47,7 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
   assert.ok(address && typeof address !== "string");
   let searchCalls = 0;
   let saves = 0;
+  let captures = 0;
   const oauthServer = new OAuthFixture();
   const transport: typeof fetch = async (input, init) => {
     if (!String(input).includes("/ns/")) return oauthServer.transport(input, init);
@@ -55,6 +57,14 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
       return Response.json({ results: [{ id: "fact", memory: "Prefer minimal skeleton code", similarity: 0.9, isLatest: true }] });
     }
     assert.ok(String(input).endsWith("/document"));
+    const raw: unknown = JSON.parse(String(init?.body));
+    const capture = z.object({ id: z.string(), content: z.string(), supportingContext: z.string() }).safeParse(raw);
+    if (capture.success) {
+      captures++;
+      assert.doesNotMatch(capture.data.content, /fixture-token|tool_call_id|supermemory_memory_policy|\"role\":\"system\"/);
+      assert.match(capture.data.supportingContext, /durable user-stated/);
+      return Response.json({ id: capture.data.id, status: "queued" });
+    }
     assert.match(String(init?.body), /Prefer small typed functions/);
     saves++;
     return Response.json({ id: "doc", status: "queued" });
@@ -67,9 +77,10 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
     systemPrompt: "You are a fixture assistant.",
     extensionFactories: [pi => registerExtension(pi, {
-      config: { apiKey: undefined, namespace: "fixture-project", autoRecall: true, allowWrites: true },
-      namespace: async () => "fixture-project", store: createSupermemoryStore(() => auth.getToken(), transport),
+      config: { apiKey: undefined, namespace: "fixture-project", autoRecall: true, autoCapture: true, allowWrites: true },
+      namespace: async () => "fixture-project", store: createSupermemoryStore(expectedIdentity => auth.getToken(expectedIdentity), transport),
       auth,
+      captureJournal: new FileCaptureJournal(join(directory, "capture")),
     })],
   });
   await loader.reload();
@@ -93,6 +104,7 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
     assert.equal(requests.length, 3);
     assert.equal(searchCalls, 2); // automatic recall plus proactive tool
     assert.equal(saves, 1);
+    assert.equal(captures, 1);
     assert.match(session.getLastAssistantText() ?? "", /Done:/);
     const first = requests[0];
     const second = requests[1];
@@ -108,6 +120,7 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
     await session.prompt("/supermemory status");
     await session.prompt("/supermemory logout");
     assert.equal(requests.length, 4); // slash commands do not call the model
+    assert.equal(captures, 2); // each complete run, not every model/tool turn
     assert.equal(oauthServer.revocations, 1);
     assert.equal((await auth.status()).kind, "signed-out");
   } finally {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { CaptureBatch } from "./capture/batch.js";
 
 export const RECALL_TYPE = "pi-supermemory.recall.v1";
 export const SEARCH_TOOL = "memory_search";
@@ -20,10 +21,15 @@ export const memorySchema = z.object({
 });
 export type Memory = z.infer<typeof memorySchema>;
 
-export interface Receipt { id: string; status: string }
+export const receiptSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  status: z.enum(["queued", "extracting", "chunking", "embedding", "indexing", "done"]),
+});
+export type Receipt = z.infer<typeof receiptSchema>;
 export interface MemoryStore {
   search(namespace: string, query: string, signal?: AbortSignal): Promise<Memory[]>;
   remember(namespace: string, text: string, signal?: AbortSignal): Promise<Receipt>;
+  capture(namespace: string, batch: CaptureBatch, signal?: AbortSignal): Promise<Receipt>;
 }
 
 const envelopeSchema = z.object({

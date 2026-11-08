@@ -346,12 +346,38 @@ test("storage validates JSON, ignores no failures except missing files, and refu
   } finally { await f.cleanup(); }
 });
 
+test("capture credentials remain bound across refresh, but cannot follow a different OAuth grant/account", async () => {
+  const f = await fixture();
+  try {
+    await f.login();
+    const identity = await f.auth.captureIdentity();
+    await f.expire();
+    assert.equal(await f.auth.getToken(identity), "access-2");
+    assert.equal(await f.auth.captureIdentity(), identity);
+    let requests = 0;
+    const store = createSupermemoryStore(expectedIdentity => f.auth.getToken(expectedIdentity), async () => {
+      requests++;
+      return Response.json({ id: `pi_capture_${"a".repeat(64)}`, status: "queued" });
+    });
+    const batch = { id: `pi_capture_${"a".repeat(64)}`, digest: "b".repeat(64), sourceIds: ["entry"], content: "fixture content", authority: identity };
+    await store.capture("fixture", batch);
+    const saved = await f.storage.read();
+    assert.ok(saved);
+    await f.storage.withLock(() => f.storage.write({ ...saved, clientId: "different-grant", accessToken: "different-access-token" }));
+    await assert.rejects(store.capture("fixture", batch), /authorization changed/);
+    assert.equal(requests, 1); // no content sent using the new account's token
+  } finally { await f.cleanup(); }
+});
+
 test("explicit API-key override prevents misleading browser login/logout", async () => {
   const f = await fixture();
   try {
     const auth = createAuthentication(f.directory, "explicit-env-key");
     assert.deepEqual(await auth.status(), { kind: "api-key" });
     assert.equal(await auth.getToken(), "explicit-env-key");
+    const identity = await auth.captureIdentity();
+    assert.equal(await auth.getToken(identity), "explicit-env-key");
+    await assert.rejects(auth.getToken("different-key-identity"), /identity changed/);
     await assert.rejects(auth.login({ openBrowser: async () => assert.fail("Must not open browser") }), /Unset it and restart/);
     await assert.rejects(auth.logout(), /cannot revoke or unset/);
     await auth.close();
