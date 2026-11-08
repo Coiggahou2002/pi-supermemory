@@ -8,8 +8,9 @@ function hit(id: string, text: string, similarity = 0.9): Memory {
 }
 
 test("configuration defaults to no automatic prompt sharing and no unattended writes", () => {
-  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, allowWrites: false });
+  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, autoCapture: false, allowWrites: false });
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "true" }).autoRecall, true);
+  assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "true" }).autoCapture, true);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "yes" }), /Invalid Supermemory settings/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_NAMESPACE: "../secret" }), /PI_SUPERMEMORY_NAMESPACE/);
 });

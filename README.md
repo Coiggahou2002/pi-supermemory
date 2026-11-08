@@ -7,9 +7,9 @@ A small **community** [Pi](https://pi.dev) extension for [Supermemory](https://s
 - `memory_remember`: the default destination for ordinary “remember this / 记住这个” requests, with confirmation by default. You do not need to name the tool.
 - Optional automatic recall: append relevant, new facts once before a run, preserving the existing conversation prefix.
 - Context-aware exact-text deduplication across automatic recall and proactive searches, using Pi's active session projection rather than a permanent “seen” list.
-- **No automatic transcript capture. No background uploads. No MCP proxy.**
+- Optional automatic capture: after a complete run, submit only new user/final-answer text for memory extraction. **Off by default; requires separate informed opt-in.** No MCP proxy.
 
-**Status:** early preview release, distributed through GitHub (not npm). Tested against Pi **1.5.0**, Node **22.23.2**, and the official **supermemory 5.1.2** SDK. Offline integration tests pass. Live OAuth discovery and public-client registration have been verified; browser consent, account-specific REST access, extraction, relevance, and billing still need live acceptance testing.
+**Status:** early preview release, distributed through GitHub (not npm). Tested against Pi **1.5.0**, Node **22.23.2**, and the official **supermemory 5.1.2** SDK. Offline integration tests pass. Live OAuth discovery and public-client registration have been verified; OAuth-authenticated capture and same-ID resubmission have also been verified with synthetic data in a disposable namespace, followed by namespace cleanup. Extraction quality, real-model reasoning, and exact billing semantics still need acceptance testing.
 
 ## Install once, then just use Pi
 
@@ -17,7 +17,7 @@ Requires [Pi](https://pi.dev) **1.5.0**, Node **22.19+**, Git, and a Supermemory
 
 ```bash
 # One-time installation into Pi's personal package list.
-pi install git:github.com/Coiggahou2002/pi-supermemory@v0.2.0
+pi install git:github.com/Coiggahou2002/pi-supermemory@v0.3.0
 
 # Start Pi normally in your project.
 pi
@@ -38,7 +38,7 @@ If you previously exported `SUPERMEMORY_API_KEY`, unset it in your shell and res
 /supermemory logout
 ```
 
-Remove the installed package with `pi remove git:github.com/Coiggahou2002/pi-supermemory@v0.2.0`; removing the package does not revoke the account grant, so log out first if desired. Version tags are pinned; install a newer release tag explicitly when upgrading.
+Remove the installed package with `pi remove git:github.com/Coiggahou2002/pi-supermemory@v0.3.0`; removing the package does not revoke the account grant, so log out first if desired. Version tags are pinned; install a newer release tag explicitly when upgrading.
 
 If you previously installed a local checkout, remove that local package first and remove any extra `-e` flag to avoid loading two copies of the extension.
 
@@ -79,6 +79,26 @@ export PI_SUPERMEMORY_AUTO_RECALL=true
 
 Turning recall off stops future automatic searches, but does not remove previously injected messages or remote facts.
 
+### Automatic capture is a separate opt-in
+
+```text
+/supermemory capture on       # review and approve the upload consent dialog
+/supermemory capture off      # stop future capture and settle/cancel in-flight work
+/supermemory capture retry    # confirm retry of up to 5 pending batches
+/supermemory capture discard  # discard pending retry metadata, not remote memories
+```
+
+When enabled, completed runs send **new user text and completed assistant answer text** to Supermemory's memory extraction pipeline automatically. You no longer have to say “remember this” for every fact. This may incur ingestion/extraction charges. It does not enable auto recall; `/supermemory on` controls that separately.
+
+- No backfill: only runs begun after enabling capture are eligible. Custom-message starts, aborted/failed/incomplete runs and edited sources are skipped.
+- Tools/results, thinking, images, system prompts, injected recalls and extension state are excluded. **Answers can still describe facts seen in tools or images.** If a user/assistant/tool source in the run contains any `<private>` marker, the entire run is skipped, including unmarked assistant echoes. This cannot detect secrets or protect later unmarked paraphrases.
+- The complete JSON payload is limited to **32 KB UTF-8** and 1,000 source entries. Oversize runs are visibly skipped, not truncated.
+- Capture is awaited at the settled boundary, not run in a detached worker; it can add auth/SDK latency after the visible answer. A queued acceptance is not proof that facts have finished extracting or are searchable.
+- A private metadata-only journal under `~/.pi/agent/supermemory/capture/` records pending/accepted batches. It does not contain another transcript copy. Pending text is reconstructed from exact source entries on the active branch only when you explicitly retry. No historical resend happens automatically on restart.
+- Retries retain the same caller-defined document ID/content. The service supports ID-based append/diff deduplication; **exactly-once extraction/billing after a lost response is not guaranteed**. Accepted batches are not retried. Corrupt journals and changed/edited/missing sources fail closed.
+- Pending work is bound to its original namespace, session and authorization grant (or API-key fingerprint), including a check against the credential actually used by the SDK. Re-login deliberately creates a new grant: old pending captures are not sent to that new login, even if it is the same account. Refreshing a token preserves the binding. Old journals contain only metadata and can be removed locally if no longer needed.
+- Turning capture off, logging out, or uninstalling cannot retract a request already accepted by the service. Use Supermemory's controls to remove remote content. Session toggles reset on `/reload`/replacement; explicit startup opt-in is `PI_SUPERMEMORY_AUTO_CAPTURE=true`.
+
 ## Configuration
 
 OAuth credentials are stored in this extension's own private directory under Pi's agent directory. Optional overrides come from process environment variables. This extension does **not** read other agents' credentials, `.env` files, or project configuration files.
@@ -88,6 +108,7 @@ OAuth credentials are stored in this extension's own private directory under Pi'
 | `SUPERMEMORY_API_KEY` | unset | Optional explicit override for CI/API-key users. When set, browser login/logout explains that you must unset it and restart before using OAuth. |
 | `PI_SUPERMEMORY_NAMESPACE` | derived locally | Explicit namespace, 1–128 ASCII letters, digits, `_` or `-`. |
 | `PI_SUPERMEMORY_AUTO_RECALL` | `false` | Enable automatic query sharing. Must be `true` or `false`. |
+| `PI_SUPERMEMORY_AUTO_CAPTURE` | `false` | Explicitly authorize automatic upload of future conversation deltas on startup, including unattended sessions. Independent of recall and manual-write permissions. |
 | `PI_SUPERMEMORY_ALLOW_WRITES` | `false` | Explicitly permit unattended writes; bypasses the confirmation dialog. Required for headless saves. |
 
 Restart Pi after changing shell environment variables. `/reload` rereads the current Pi process environment, not a separate shell's environment.
@@ -114,11 +135,11 @@ For cross-machine or cross-client sharing, deliberately set the same `PI_SUPERME
 ```ts
 export default function (pi: ExtensionAPI) {
   const auth = createAuthentication(getAgentDir());
-  const store = createSupermemoryStore(() => auth.getToken());
+  const store = createSupermemoryStore(expectedIdentity => auth.getToken(expectedIdentity));
 
   registerRecall(pi, dependencies, isEnabled);
   registerTools(pi, dependencies);
-  // registerCapture is intentionally not implemented yet.
+  registerCapture(pi, captureDependencies, config.autoCapture);
 }
 ```
 
@@ -134,6 +155,12 @@ before_agent_start
 memory_search / memory_remember
   → same MemoryStore adapter
   → official Supermemory SDK
+
+agent_settled (capture opt-in only)
+  → inspect only this run's new safe source entries
+  → persist stable pending batch metadata
+  → send role-labeled delta through the same SDK
+  → checkpoint validated acceptance
 ```
 
 Recall messages are appended to the conversation, not interpolated into a changing system-prompt section. Tool-loop requests extend that prefix instead of moving the memory block to the end on every request. This is cache-friendly structure, **not a guarantee of provider cache hits**.
@@ -152,9 +179,9 @@ After compaction, a fact absent from surviving envelopes can be recalled again. 
 
 ## Privacy and safety
 
-- Manual search sends the query; manual save sends the confirmed fact. Auto recall additionally sends eligible expanded prompts. Returned facts are sent to your configured LLM provider and persisted in Pi's session file, even when the recall message is hidden in the UI.
+- Manual search sends the query; manual save sends the confirmed fact. Auto recall additionally sends eligible expanded prompts. Separately enabled automatic capture sends new user/final-answer text for remote extraction. Returned facts are sent to your configured LLM provider and persisted in Pi's session file, even when the recall message is hidden in the UI.
 - `<private>` markers block the entire search/save operation or skip automatic recall for that prompt. They are a convenience guard, **not secret detection or DLP**. Do not submit sensitive content.
-- Save confirmation reviews the exact trimmed text and namespace. Headless saving fails closed unless unattended writes are explicitly enabled.
+- Manual-save confirmation reviews the exact trimmed text and namespace. Headless manual saving fails closed unless unattended writes are explicitly enabled. Automatic capture uses its own explicit upload opt-in instead of prompting for each turn.
 - Retrieved text is labeled historical data, not instructions. This is not a prompt-injection sandbox.
 - No raw SDK error bodies, credentials, queries, or saved facts are logged by this extension. Pi itself still stores ordinary messages and tool calls in sessions.
 - Automatic recall failure warns and allows the coding task to continue. Explicit tool failures are reported as errors. Nothing is silently treated as a successful save.
@@ -171,6 +198,7 @@ src/store.ts       validated official-SDK adapter
 src/identity.ts    local project identity
 src/config.ts      validated environment configuration
 src/auth/          OAuth lifecycle, validated private storage, optional env-key override
+src/capture/       delta selection, consent lifecycle, grant-bound journal, stable retries
 ```
 
 ```bash
@@ -188,9 +216,11 @@ Tests cover strict typing, selection/bounds, Chinese prompts, project/worktree i
 
 OAuth tests also exercise the real `openid-client` library and real loopback HTTP callbacks with fixture authorization-server responses: state/issuer rejection, single-use callbacks, PKCE, refresh rotation, concurrent auth instances, cancellation, timeout, secure storage/reopen, revocation failures, malformed responses, and SDK bearer authentication.
 
-**Live checks completed:** official discovery and client registration, stopped before browser consent with no user tokens requested or saved.
+Capture tests cover future-only windows, full-run private suppression and assistant echoes, failed/aborted/custom starts, source edits, bounded payloads, restart/retry, mismatched receipts, corrupt journals, branch/namespace/grant isolation, off/upload races, and actual competing processes. The end-to-end Pi test includes automatic capture after each complete answer and confirms that tool turns do not trigger extra captures.
 
-**Not yet tested:** browser consent and account-specific REST access through OAuth, real model reasoning, a manual interactive TUI confirmation pass, or provider-side cache metrics. These are pre-publication acceptance checks, not replaced by offline tests.
+**Live checks completed:** official OAuth discovery/client registration; OAuth-authenticated synthetic capture and same-ID resubmission; disposable namespace cleanup checked via the newest namespace listing. A document-delete receipt during queued processing did not confirm deletion, so the entire random QA namespace was deleted and its absence checked instead.
+
+**Not yet tested:** automatic extraction quality/searchability after indexing, real model reasoning, a manual interactive TUI confirmation pass, or provider-side cache/billing metrics. These are pre-publication acceptance checks, not replaced by offline tests.
 
 ## Acknowledgements
 

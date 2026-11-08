@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { CredentialStorage } from "./storage.js";
 import { OAuthAuthentication, type Authentication } from "./oauth.js";
 
@@ -11,7 +12,11 @@ export function createAuthentication(agentDirectory: string, apiKey?: string): A
   const oauth = new OAuthAuthentication(new CredentialStorage(join(agentDirectory, "supermemory")));
   if (!apiKey) return oauth;
   return {
-    async getToken() { return apiKey; },
+    async getToken(expectedCaptureIdentity) {
+      if (expectedCaptureIdentity && expectedCaptureIdentity !== createHash("sha256").update(apiKey).digest("hex")) throw new Error("Capture API-key identity changed; no content was sent.");
+      return apiKey;
+    },
+    async captureIdentity() { return createHash("sha256").update(apiKey).digest("hex"); },
     async status() { return { kind: "api-key" }; },
     async login() {
       throw new Error("SUPERMEMORY_API_KEY is overriding OAuth. Unset it and restart Pi, then run /supermemory login. No browser was opened.");

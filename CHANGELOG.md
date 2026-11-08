@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-11-08
+
+- Opt into automatic memory capture with `/supermemory capture on`: future completed conversations can become memories without a separate “remember this” request.
+- Capture only new user/final-answer text; skip entire private-marked, incomplete or oversize runs, with no history backfill.
+- Retry unconfirmed captures with stable document IDs and a private metadata-only journal; pending uploads stay within their original session, namespace, branch and authorization grant.
+- Stop with `/supermemory capture off` or discard pending retry metadata with `/supermemory capture discard`. Recall and manual-write settings never enable capture implicitly.
+
 ## 0.2.0 — 2026-11-08
 
 - Install the community preview directly from GitHub with Pi; no local checkout or per-launch wrapper is required.
