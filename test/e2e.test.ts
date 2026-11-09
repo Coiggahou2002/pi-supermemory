@@ -13,6 +13,7 @@ import { OAuthFixture } from "./oauth-fixture.js";
 import { CredentialStorage } from "../src/auth/storage.js";
 import { OAuthAuthentication } from "../src/auth/oauth.js";
 import { FileCaptureJournal } from "../src/capture/journal.js";
+import { loadConfig } from "../src/config.js";
 
 const requestSchema = z.object({ messages: z.array(z.object({ role: z.string(), content: z.unknown() }).passthrough()) });
 
@@ -71,13 +72,15 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
   };
   const auth = new OAuthAuthentication(new CredentialStorage(join(directory, "supermemory")), transport, 0);
   await auth.login({ openBrowser: async url => { assert.equal((await fetch(oauthServer.callback(url))).status, 200); } });
+  const config = loadConfig({ PI_SUPERMEMORY_NAMESPACE: "fixture-project", PI_SUPERMEMORY_AUTO_RECALL: "true", PI_SUPERMEMORY_ALLOW_WRITES: "true" });
+  assert.equal(config.autoCapture, true); // No capture environment flag or enable command.
   const settings = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
   const loader = new DefaultResourceLoader({
     cwd: directory, agentDir: directory, settingsManager: settings,
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
     systemPrompt: "You are a fixture assistant.",
     extensionFactories: [pi => registerExtension(pi, {
-      config: { apiKey: undefined, namespace: "fixture-project", autoRecall: true, autoCapture: true, allowWrites: true },
+      config,
       namespace: async () => "fixture-project", store: createSupermemoryStore(expectedIdentity => auth.getToken(expectedIdentity), transport),
       auth,
       captureJournal: new FileCaptureJournal(join(directory, "capture")),

@@ -7,10 +7,12 @@ function hit(id: string, text: string, similarity = 0.9): Memory {
   return { id, text, similarity };
 }
 
-test("configuration defaults to no automatic prompt sharing and no unattended writes", () => {
-  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, autoCapture: false, allowWrites: false });
+test("capture defaults on, with recall/manual writes still opt-in and a persistent capture-off override", () => {
+  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, autoCapture: true, allowWrites: false });
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "true" }).autoRecall, true);
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "true" }).autoCapture, true);
+  assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "false" }).autoCapture, false);
+  assert.throws(() => loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "no" }), /PI_SUPERMEMORY_AUTO_CAPTURE/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "yes" }), /Invalid Supermemory settings/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_NAMESPACE: "../secret" }), /PI_SUPERMEMORY_NAMESPACE/);
 });

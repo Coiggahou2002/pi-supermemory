@@ -5,7 +5,7 @@ const environmentSchema = z.object({
   SUPERMEMORY_API_KEY: z.string().trim().min(1).optional(),
   PI_SUPERMEMORY_NAMESPACE: z.string().trim().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
   PI_SUPERMEMORY_AUTO_RECALL: booleanEnv,
-  PI_SUPERMEMORY_AUTO_CAPTURE: booleanEnv,
+  PI_SUPERMEMORY_AUTO_CAPTURE: z.enum(["true", "false"]).default("true").transform(value => value === "true"),
   PI_SUPERMEMORY_ALLOW_WRITES: booleanEnv,
 });
 

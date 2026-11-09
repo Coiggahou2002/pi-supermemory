@@ -10,7 +10,7 @@ import { fixtureAuthentication } from "./helpers.js";
 import { FileCaptureJournal } from "../src/capture/journal.js";
 import { RECALL_TYPE, SAVE_TOOL, SEARCH_TOOL, type MemoryStore } from "../src/memory.js";
 
-async function harness(autoRecall = true, allowWrites = false, configured = true) {
+async function harness(autoRecall = true, allowWrites = false, configured = true, autoCapture = false) {
   const directory = await mkdtemp(join(tmpdir(), "pi-memory-extension-"));
   let searches = 0;
   let saves = 0;
@@ -31,7 +31,7 @@ async function harness(autoRecall = true, allowWrites = false, configured = true
     settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
     extensionFactories: [pi => registerExtension(pi, {
-      config: { apiKey: "fake", namespace: "test-project", autoRecall, autoCapture: false, allowWrites },
+      config: { apiKey: "fake", namespace: "test-project", autoRecall, autoCapture, allowWrites },
       store: configured ? store : undefined,
       auth,
       captureJournal: new FileCaptureJournal(join(directory, "capture")),
@@ -220,7 +220,7 @@ test("OAuth commands connect in place and logout makes tools require login inste
   } finally { await h.cleanup(); }
 });
 
-test("capture requires distinct informed consent; recall on and manual-write permissions never enable it", async () => {
+test("an explicit capture-off policy requires confirmation to re-enable; recall/manual writes do not override it", async () => {
   const h = await harness(false, true);
   try {
     const command = h.runner.getCommand("supermemory");
@@ -250,6 +250,28 @@ test("capture requires distinct informed consent; recall on and manual-write per
     await command.handler("capture off", interactive);
     assert.match(notices.at(-1) ?? "", /automatic capture=off/);
   } finally { await h.cleanup(); }
+});
+
+test("default-on capture gives a prominent startup disclosure before any user message", async () => {
+  const h = await harness(false, false, true, loadConfig({}).autoCapture);
+  const notices: string[] = [];
+  try {
+    h.runner.setUIContext({ ...h.runner.getUIContext(), notify: message => { notices.push(message); } }, "tui");
+    await h.runner.emit({ type: "session_start", reason: "startup" });
+    assert.match(notices.join(), /Automatic memory capture is ON/);
+    assert.match(notices.join(), /new user text and final answers will be sent/);
+    assert.match(notices.join(), /charges may apply/);
+    assert.match(notices.join(), /capture off/);
+    assert.match(notices.join(), /PI_SUPERMEMORY_AUTO_CAPTURE=false/);
+    assert.equal(h.session.getBranch().length, 0);
+  } finally { await h.cleanup(); }
+  const disabled = await harness(false, false, true, loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "false" }).autoCapture);
+  try {
+    const disabledNotices: string[] = [];
+    disabled.runner.setUIContext({ ...disabled.runner.getUIContext(), notify: message => { disabledNotices.push(message); } }, "tui");
+    await disabled.runner.emit({ type: "session_start", reason: "startup" });
+    assert.equal(disabledNotices.length, 0);
+  } finally { await disabled.cleanup(); }
 });
 
 test("actual package entry loads through Pi's TypeScript loader with isolated configuration", async () => {

@@ -39,7 +39,7 @@ export const MEMORY_ROUTING_POLICY = [
   "Do not silently fall back to local files after a Supermemory failure. Report the failure and ask before changing destination.",
   "memory_remember handles write confirmation. Do not ask an extra preliminary confirmation or claim success without a successful tool receipt.",
   "Automatic recall on/off controls background searches only; it does not change this default destination for explicit remember requests.",
-  "Do not use memory_remember to upload transcripts or infer permission to save unrelated facts. Automatic conversation capture, if explicitly enabled by the user, is managed separately by the extension. Never save secrets or private content.",
+  "Do not use memory_remember to upload transcripts or infer permission to save unrelated facts. Automatic conversation capture is enabled by default and managed separately by the extension; the user can turn it off. Never save secrets or private content.",
 ].join("\n");
 
 export function registerMemoryRouting(pi: ExtensionAPI, deps: Dependencies): void {
@@ -157,7 +157,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
       if (action === "capture on") {
         requireStore(deps);
         if ((await deps.auth.status()).kind === "signed-out") throw new AuthenticationRequired();
-        if (!ctx.hasUI) throw new Error("Capture opt-in needs confirmation. For unattended use explicitly set PI_SUPERMEMORY_AUTO_CAPTURE=true before starting Pi.");
+        if (!ctx.hasUI) throw new Error("Re-enabling capture needs interactive confirmation. For unattended use set PI_SUPERMEMORY_AUTO_CAPTURE=true before starting Pi.");
         await ctx.waitForIdle();
         const approved = await ctx.ui.confirm("Enable automatic conversation capture?", "Future user text and completed assistant answer text in this session will be sent to Supermemory automatically for memory extraction, without asking on every turn. This may incur service charges. Runs containing <private> markers are skipped; this is not secret detection. Old history, tools, thinking, images, system prompts and recalled memories are not uploaded. Enable?");
         if (!approved) return;
@@ -171,7 +171,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
         await ctx.waitForIdle();
         if (ctx.hasUI) {
           if (!await ctx.ui.confirm("Retry pending captures?", "Resend up to 5 unconfirmed batches from this session's active branch, namespace and current authorization grant using their original document IDs. This can incur charges even if a previous response was lost. No other history will be sent. Continue?")) return;
-        } else if (!deps.config.autoCapture) throw new Error("Headless retry requires explicit PI_SUPERMEMORY_AUTO_CAPTURE=true.");
+        } // In headless mode the explicit retry command authorizes this resend.
         const count = await capture.retry(ctx);
         const message = `Capture retry: ${count} batch(es) accepted. Up to 5 are processed per attempt; repeat the command if more remain. Indexing may still be pending.`;
         if (ctx.hasUI) ctx.ui.notify(message, "info"); else console.error(message);
@@ -191,7 +191,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
             await open(url.href, { wait: false });
           },
         });
-        ctx.ui.notify("Supermemory OAuth connected. Remember requests now use Supermemory; automatic recall remains a separate opt-in (/supermemory on).", "info");
+        ctx.ui.notify(`Supermemory OAuth connected. Automatic capture is ${capture.enabled() ? "ON: future user text and final answers are sent remotely for memory extraction" : "off"}. Stop it with /supermemory capture off. Automatic recall is separate (/supermemory on).`, "info");
       } else if (action === "logout") {
         await capture.disable();
         if (ctx.hasUI) ctx.ui.setStatus("supermemory-capture", undefined);
@@ -225,6 +225,10 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
     if (ctx.hasUI) {
       ctx.ui.setStatus("supermemory", status.kind === "signed-out" ? "Memory: sign in" : `Memory: ${autoRecall ? "auto" : "manual"}`);
       ctx.ui.setStatus("supermemory-capture", capture.enabled() ? "Capture: on" : undefined);
+    }
+    if (capture.enabled()) {
+      const notice = `Automatic memory capture is ON${status.kind === "signed-out" ? " after sign-in" : ""}: new user text and final answers will be sent to Supermemory for extraction (charges may apply). Private-marked runs are skipped; this is not secret detection. /supermemory capture off stops this session; PI_SUPERMEMORY_AUTO_CAPTURE=false keeps it off across restarts.`;
+      if (ctx.hasUI) ctx.ui.notify(notice, "warning"); else console.error(notice);
     }
   });
   pi.on("session_shutdown", async (_event, ctx) => {
