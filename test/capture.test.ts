@@ -35,7 +35,7 @@ test("capture only includes future user/final-answer text, once per settled run,
   } finally { await h.cleanup(); }
 });
 
-test("capture defaults off, enabling never backfills off-period history, and disabling stops future runs", async () => {
+test("explicit capture-off policy is respected, re-enabling never backfills, and disabling stops future runs", async () => {
   const h = await captureHarness({ initiallyEnabled: false });
   try {
     await h.begin("Not opted in yet");

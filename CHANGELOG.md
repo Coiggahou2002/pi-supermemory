@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 — 2026-11-08
+
+- Automatic capture is now on by default after sign-in: new completed exchanges are submitted for memory extraction without an extra enable command.
+- Startup clearly discloses remote uploads and possible charges. Use `/supermemory capture off` for this session, or `PI_SUPERMEMORY_AUTO_CAPTURE=false` to keep it off across restarts.
+- No history backfill; private-run filtering, bounded payloads, grant-bound retries, and manual-save confirmation are unchanged. Automatic recall remains independently opt-in.
+
 ## 0.3.0 — 2026-11-08
 
 - Opt into automatic memory capture with `/supermemory capture on`: future completed conversations can become memories without a separate “remember this” request.

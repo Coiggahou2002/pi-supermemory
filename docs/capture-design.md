@@ -1,8 +1,9 @@
 # Automatic capture contract
 
-## Consent and payload
+## Default behavior, disclosure and payload
 
-- Off by default. `/supermemory capture on` explicitly authorizes automatic remote ingestion of future user text and completed assistant answer text in the current extension instance; interactive consent explains this and possible billing. The independent `PI_SUPERMEMORY_AUTO_CAPTURE=true` environment setting is unattended/startup opt-in. Recall and manual-write settings do not enable capture.
+- Since v0.4.0, on by default at the product owner's request: signing in should make new conversations become memories without a separate enable step. Startup clearly discloses remote user/final-answer uploads, possible billing, private-marker limitations, and opt-out controls before any user message. This also applies to headless use (stderr disclosure). No consent modal gates the default behavior; this is a deliberate change from v0.3.0.
+- `/supermemory capture off` stops the current instance. `PI_SUPERMEMORY_AUTO_CAPTURE=false` is the persistent opt-out; session commands reset on reload. Explicit re-enable in the UI still shows confirmation. Manual fact writes retain confirmation; recall retains its independent opt-in. Retrying pending batches is an explicit resend operation, not an automatic backlog drain.
 - No history backfill. `before_agent_start` records the current branch leaf BEFORE Pi persists the new user message. `agent_settled` captures only entries appended after that boundary. Custom-message starts, aborted/failed/incomplete runs, changed branches, and runs begun while disabled/signed out are not captured.
 - Exclude system prompts, tools/results, assistant thinking/tool-calling responses, injected recalls, images, and extension state. If ANY source user/assistant/tool text in the run contains an opening/closing `<private>` marker, skip the whole run, including assistant echoes. This is not secret detection or protection against later unmarked paraphrases.
 - Bound the complete serialized payload to 32 KB UTF-8. Oversize runs are visibly skipped, not silently truncated. Content has explicit speaker roles; supportingContext asks the service to extract durable user-stated preferences, confirmed decisions and lessons, not assistant guesses or transient state. Extraction quality remains service-dependent.
@@ -17,4 +18,4 @@
 
 ## Verification and release
 
-Tests cross actual Pi run/message/session/compaction boundaries and real SDK serialization. Cover opt-in/off/history windows, multiple tool turns, private echoes, filtering, bounded payloads, aborts/errors/custom starts, duplicate settled events, pending retry, response loss, mismatched receipts, journal reopen/corruption, branch/namespace/session isolation, and competing processes/instances. Keep automatic extraction and real account billing explicit acceptance checks. Release a new pinned preview tag only after CI passes; never move v0.2.0.
+Tests cross actual Pi run/message/session/compaction boundaries and real SDK serialization. Cover default-on/disclosure/opt-out/history windows, multiple tool turns, private echoes, filtering, bounded payloads, aborts/errors/custom starts, duplicate settled events, pending retry, response loss, mismatched receipts, journal reopen/corruption, branch/namespace/session isolation, and competing processes/instances. Keep automatic extraction and real account billing explicit acceptance checks. Release a new pinned preview tag only after CI passes; never move v0.2.0.
