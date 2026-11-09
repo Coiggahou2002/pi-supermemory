@@ -4,6 +4,7 @@ import type { Authentication } from "../auth/index.js";
 import { containsPrivateMarker, type MemoryStore } from "../memory.js";
 import { entriesAfter, prepareCapture, type CaptureBatch } from "./batch.js";
 import type { CaptureJournal, PendingCapture } from "./journal.js";
+import type { CaptureMode, CaptureInspection } from "./types.js";
 
 const MAX_RETRY_BATCHES = 5;
 interface CaptureDependencies {
@@ -20,9 +21,13 @@ interface RunWindow {
   previousLeafId: string | null;
   privatePrompt: boolean;
   generation: number;
+  mode: CaptureMode;
 }
 export interface CaptureControls {
   enabled(): boolean;
+  mode(): CaptureMode;
+  setMode(mode: CaptureMode): void;
+  inspect(ctx: ExtensionContext): Promise<CaptureInspection>;
   enable(): void;
   disable(): Promise<void>;
   retry(ctx: ExtensionContext): Promise<number>;
@@ -44,15 +49,16 @@ function reconstruct(pending: PendingCapture, branch: readonly SessionEntry[], s
   // Honor later privacy/context edits by refusing replay of any changed source.
   const edited = branch.some(entry => entry.type === "context_edit" && pending.sourceIds.includes(entry.targetId));
   if (edited) throw new Error("Pending capture sources were edited; nothing was retried. Use capture discard to forget pending retry metadata.");
-  const result = prepareCapture(sessionId, namespace, entries, authority);
+  const result = prepareCapture(sessionId, namespace, entries, authority, { format: pending.format, mode: pending.mode });
   if (result.kind !== "batch" || result.batch.id !== pending.id || result.batch.digest !== pending.digest) {
     throw new Error("Pending capture no longer matches safe source content; nothing was retried.");
   }
   return result.batch;
 }
 
-export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, initiallyEnabled: boolean): CaptureControls {
+export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, initiallyEnabled: boolean, initialMode: CaptureMode = "dynamic"): CaptureControls {
   let enabled = initiallyEnabled;
+  let mode = initialMode;
   let generation = 0;
   let window: RunWindow | undefined;
   let active: Promise<unknown> | undefined;
@@ -87,6 +93,7 @@ export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, ini
     window = undefined;
     if (!enabled || event.messageType !== "user" || !deps.store) return;
     const runGeneration = generation;
+    const runMode = mode;
     if ((await deps.auth.status()).kind === "signed-out") return;
     const sessionId = ctx.sessionManager.getSessionId();
     const authority = await deps.auth.captureIdentity();
@@ -100,6 +107,7 @@ export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, ini
       previousLeafId: ctx.sessionManager.getLeafId(),
       privatePrompt: containsPrivateMarker(event.prompt),
       generation: runGeneration,
+      mode: runMode,
     };
   });
 
@@ -118,7 +126,7 @@ export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, ini
       const branch = ctx.sessionManager.getBranch();
       const entries = entriesAfter(branch, run.previousLeafId);
       if (!entries) throw new Error("Capture source branch changed during the run.");
-      const result = prepareCapture(run.journalId, run.namespace, entries, run.authority);
+      const result = prepareCapture(run.journalId, run.namespace, entries, run.authority, { format: "text-v2", mode: run.mode });
       if (result.kind === "skip") {
         if (result.reason === "private") notify(ctx, "Supermemory capture skipped this entire run because it contains a <private> marker.");
         if (result.reason === "oversize") notify(ctx, "Supermemory capture skipped this run: text exceeds the 32 KB payload/source-entry limit. Nothing was truncated or uploaded.", "warning");
@@ -126,7 +134,7 @@ export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, ini
       }
       if (ctx.hasUI) ctx.ui.setStatus("supermemory-capture", "Capture: sending…");
       const sent = await tracked(signal => send(result.batch, run, signal));
-      if (ctx.hasUI) ctx.ui.setStatus("supermemory-capture", sent ? "Capture: submitted (indexing may be pending)" : "Capture: already submitted");
+      if (ctx.hasUI) ctx.ui.setStatus("supermemory-capture", sent ? `Capture: source submitted (${run.mode}); memory status unchecked` : "Capture: already submitted");
     } catch {
       if (ctx.hasUI) ctx.ui.setStatus("supermemory-capture", "Capture: unconfirmed");
       notify(ctx, "Supermemory capture was not confirmed. Pending batches can be retried with /supermemory capture retry (current branch only). If preparation failed, no pending batch exists; check local storage and /supermemory status. No transcript was logged.", "warning");
@@ -135,6 +143,21 @@ export function registerCapture(pi: ExtensionAPI, deps: CaptureDependencies, ini
 
   return {
     enabled: () => enabled,
+    mode: () => mode,
+    setMode(value) { mode = value; },
+    async inspect(ctx) {
+      const store = deps.store;
+      if (!store || (await deps.auth.status()).kind === "signed-out") throw new Error("Run /supermemory login before checking capture progress.");
+      const authority = await deps.auth.captureIdentity();
+      const sessionId = createHash("sha256").update(JSON.stringify({ sessionId: ctx.sessionManager.getSessionId(), authority })).digest("hex");
+      const namespace = await deps.namespace(ctx.cwd);
+      const snapshot = await deps.journal.withSession(sessionId, namespace, async records => ({ pending: records.pending().length, latest: records.latestAccepted() }));
+      return {
+        pending: snapshot.pending,
+        mode: snapshot.latest?.mode,
+        progress: snapshot.latest ? await store.captureStatus(namespace, snapshot.latest.id, authority, ctx.signal) : undefined,
+      };
+    },
     enable() { generation++; enabled = true; window = undefined; },
     async disable() {
       generation++;

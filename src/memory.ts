@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { CaptureBatch } from "./capture/batch.js";
+import type { CaptureBatch, CaptureProgress } from "./capture/types.js";
 
 export const RECALL_TYPE = "pi-supermemory.recall.v1";
 export const SEARCH_TOOL = "memory_search";
@@ -30,6 +30,7 @@ export interface MemoryStore {
   search(namespace: string, query: string, signal?: AbortSignal): Promise<Memory[]>;
   remember(namespace: string, text: string, signal?: AbortSignal): Promise<Receipt>;
   capture(namespace: string, batch: CaptureBatch, signal?: AbortSignal): Promise<Receipt>;
+  captureStatus(namespace: string, id: string, authority: string, signal?: AbortSignal): Promise<CaptureProgress>;
 }
 
 const envelopeSchema = z.object({

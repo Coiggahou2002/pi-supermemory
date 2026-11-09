@@ -24,6 +24,7 @@ async function harness(autoRecall = true, allowWrites = false, configured = true
       return { id: "doc", status: "queued" };
     },
     async capture(_namespace, batch) { return { id: batch.id, status: "queued" }; },
+    async captureStatus(_namespace, id) { return { id, documentStatus: "done", memoryStatus: "dreaming", memoryCount: 0 }; },
   };
   const auth = fixtureAuthentication(configured ? "api-key" : "signed-out");
   const loader = new DefaultResourceLoader({
@@ -31,7 +32,7 @@ async function harness(autoRecall = true, allowWrites = false, configured = true
     settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
     extensionFactories: [pi => registerExtension(pi, {
-      config: { apiKey: "fake", namespace: "test-project", autoRecall, autoCapture, allowWrites },
+      config: { apiKey: "fake", namespace: "test-project", autoRecall, autoCapture, captureMode: "dynamic", allowWrites },
       store: configured ? store : undefined,
       auth,
       captureJournal: new FileCaptureJournal(join(directory, "capture")),
@@ -249,6 +250,36 @@ test("an explicit capture-off policy requires confirmation to re-enable; recall/
     assert.match(confirmations.join(), /charges/);
     await command.handler("capture off", interactive);
     assert.match(notices.at(-1) ?? "", /automatic capture=off/);
+  } finally { await h.cleanup(); }
+});
+
+test("instant mode requires a separate extra-cost confirmation and dynamic remains the default", async () => {
+  const h = await harness(false, false, true, true);
+  try {
+    const command = h.runner.getCommand("supermemory");
+    assert.ok(command);
+    const headless = h.runner.createCommandContext();
+    headless.waitForIdle = async () => {};
+    await assert.rejects(command.handler("capture mode instant", headless), /one extra operation/);
+    let approved = false;
+    const confirmations: string[] = [];
+    const notices: string[] = [];
+    h.runner.setUIContext({
+      ...h.runner.getUIContext(), notify: message => { notices.push(message); },
+      confirm: async (_title, message) => { confirmations.push(message); return approved; },
+    }, "tui");
+    const ctx = h.runner.createCommandContext(); ctx.waitForIdle = async () => {};
+    await command.handler("capture mode instant", ctx);
+    await command.handler("status", ctx);
+    assert.match(notices.at(-1) ?? "", /capture mode=dynamic/);
+    approved = true;
+    await command.handler("capture mode instant", ctx);
+    assert.match(notices.at(-1) ?? "", /capture mode=instant/);
+    assert.match(confirmations.join(), /ONE EXTRA OPERATION/);
+    assert.match(confirmations.join(), /pending retries retain their original mode/);
+    await command.handler("capture mode dynamic", ctx);
+    assert.match(notices.at(-1) ?? "", /capture mode=dynamic/);
+    assert.equal(confirmations.length, 2);
   } finally { await h.cleanup(); }
 });
 

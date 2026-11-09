@@ -17,7 +17,7 @@ Requires [Pi](https://pi.dev) **1.5.0**, Node **22.19+**, Git, and a Supermemory
 
 ```bash
 # One-time installation into Pi's personal package list.
-pi install git:github.com/Coiggahou2002/pi-supermemory@v0.4.0
+pi install git:github.com/Coiggahou2002/pi-supermemory@v0.5.0
 
 # Start Pi normally in your project.
 pi
@@ -38,7 +38,7 @@ If you previously exported `SUPERMEMORY_API_KEY`, unset it in your shell and res
 /supermemory logout
 ```
 
-Remove the installed package with `pi remove git:github.com/Coiggahou2002/pi-supermemory@v0.4.0`; removing the package does not revoke the account grant, so log out first if desired. Version tags are pinned; install a newer release tag explicitly when upgrading.
+Remove the installed package with `pi remove git:github.com/Coiggahou2002/pi-supermemory@v0.5.0`; removing the package does not revoke the account grant, so log out first if desired. Version tags are pinned; install a newer release tag explicitly when upgrading.
 
 If you previously installed a local checkout, remove that local package first and remove any extra `-e` flag to avoid loading two copies of the extension.
 
@@ -48,13 +48,13 @@ You can chat normally; no special “remember this” phrase or enable command i
 When explaining architecture, I prefer minimal skeleton code rather than long prose.
 ```
 
-After the completed answer, the new exchange is submitted for extraction automatically. Explicit `memory_remember` calls still require their own confirmation by default. After indexing, try asking:
+After the completed answer, the new exchange is submitted for extraction automatically. Explicit `memory_remember` calls still require their own confirmation by default. After memory generation finishes, try asking:
 
 ```text
 What explanation style did I ask you to remember?
 ```
 
-Writes return an acceptance receipt. **A queued write is not yet searchable**; extraction and indexing happen asynchronously. A miss immediately after a save is not proof of failure.
+Writes return an acceptance receipt. **Source acceptance/searchability is not completed memory generation.** Both stages are asynchronous; dynamic memory generation may lag searchable source processing by several minutes. A miss immediately after a save is not proof of failure. Inspect the stages with `/supermemory capture status`.
 
 ### Default destination and local memory skills
 
@@ -88,15 +88,17 @@ Turning recall off stops future automatic searches, but does not remove previous
 /supermemory capture off      # stop future capture and settle/cancel in-flight work
 /supermemory capture retry    # confirm retry of up to 5 pending batches
 /supermemory capture discard  # discard pending retry metadata, not remote memories
+/supermemory capture status   # inspect source status, memory stage and memory count
 ```
 
 By default, completed runs send **new user text and completed assistant answer text** to Supermemory's memory extraction pipeline automatically. You no longer have to say “remember this” for every fact. This may incur ingestion/extraction charges. It does not enable auto recall; `/supermemory on` controls that separately.
 
 - No backfill: only new runs begun while capture is on and signed in are eligible. Custom-message starts, aborted/failed/incomplete runs and edited sources are skipped.
 - Tools/results, thinking, images, system prompts, injected recalls and extension state are excluded. **Answers can still describe facts seen in tools or images.** If a user/assistant/tool source in the run contains any `<private>` marker, the entire run is skipped, including unmarked assistant echoes. This cannot detect secrets or protect later unmarked paraphrases.
-- The complete JSON payload is limited to **32 KB UTF-8** and 1,000 source entries. Oversize runs are visibly skipped, not truncated.
+- New captured documents are readable Markdown: a heading derived from the first user text, followed by quoted User/Assistant sections, not internal JSON. A title hint is provided in metadata; the service may generate a different title. Namespace-wide `supportingContext` is no longer overwritten on every upload. Existing namespace descriptions are left alone.
+- The complete source payload is limited to **32 KB UTF-8** and 1,000 source entries. Oversize runs are visibly skipped, not truncated.
 - Capture is awaited at the settled boundary, not run in a detached worker; it can add auth/SDK latency after the visible answer. A queued acceptance is not proof that facts have finished extracting or are searchable.
-- A private metadata-only journal under `~/.pi/agent/supermemory/capture/` records pending/accepted batches. It does not contain another transcript copy. Pending text is reconstructed from exact source entries on the active branch only when you explicitly retry. No historical resend happens automatically on restart.
+- A private metadata-only journal under `~/.pi/agent/supermemory/capture/` records pending/accepted batches. It stores source references, format, processing mode and receipt state, not another transcript copy. Pending text is reconstructed from exact source entries on the active branch only when you explicitly retry. No historical resend happens automatically on restart.
 - Retries retain the same caller-defined document ID/content. The service supports ID-based append/diff deduplication; **exactly-once extraction/billing after a lost response is not guaranteed**. Accepted batches are not retried. Corrupt journals and changed/edited/missing sources fail closed.
 - Pending work is bound to its original namespace, session and authorization grant (or API-key fingerprint), including a check against the credential actually used by the SDK. Re-login deliberately creates a new grant: old pending captures are not sent to that new login, even if it is the same account. Refreshing a token preserves the binding. Old journals contain only metadata and can be removed locally if no longer needed.
 - Turning capture off, logging out, or uninstalling cannot retract a request already accepted by the service. Use Supermemory's controls to remove remote content. Session toggles reset on `/reload`/replacement, so `/supermemory capture off` alone is **not a persistent opt-out**. Set `PI_SUPERMEMORY_AUTO_CAPTURE=false` to keep it off across restarts; `true` restores the default.
@@ -111,6 +113,7 @@ OAuth credentials are stored in this extension's own private directory under Pi'
 | `PI_SUPERMEMORY_NAMESPACE` | derived locally | Explicit namespace, 1–128 ASCII letters, digits, `_` or `-`. |
 | `PI_SUPERMEMORY_AUTO_RECALL` | `false` | Enable automatic query sharing. Must be `true` or `false`. |
 | `PI_SUPERMEMORY_AUTO_CAPTURE` | `true` | Automatically upload eligible new conversation deltas after sign-in, including unattended sessions. Set `false` for a persistent opt-out. Independent of recall and manual-write permissions. |
+| `PI_SUPERMEMORY_CAPTURE_MODE` | `dynamic` | `instant` opts into one extra operation per captured document for independent immediate processing. Original modes are retained on retries. |
 | `PI_SUPERMEMORY_ALLOW_WRITES` | `false` | Explicitly permit unattended writes; bypasses the confirmation dialog. Required for headless saves. |
 
 Restart Pi after changing shell environment variables. `/reload` rereads the current Pi process environment, not a separate shell's environment.
@@ -125,6 +128,27 @@ The endpoint is deliberately fixed to `https://api.supermemory.ai`; this prototy
 - Tokens refresh before expiry. File locking serializes login/refresh/logout across Pi processes; there is no independent per-process token cache. Shutdown waits for an in-flight refresh to persist rotated credentials. If the refresh response is lost or invalid, local login is cleared instead of retrying a potentially rotated token. Run login again. A discovery-only outage retains credentials.
 - Logout attempts remote refresh-token revocation and removes local credentials even if the service is unreachable. A warning tells you when revocation was not confirmed; revoke access in Supermemory account settings in that case. Logout does not erase saved memories or existing session text, and in-flight requests/access tokens may remain usable until the server invalidates them or they expire.
 - The production issuer and endpoint origins are pinned and redirects rejected. Supermemory currently returns HTTP 200 from public client registration; a narrow adapter normalizes only that response to RFC 7591's 201 for standard-library validation. No other response or authorization error is rewritten.
+
+### Source searchability vs memory generation
+
+`/supermemory capture status` reads the latest accepted capture **for the current session, namespace and login grant**. Resume the original session to inspect its last capture; this command is not an account-global document browser. It reports:
+
+```text
+Source=done; memory generation=dreaming; derived memories=0
+```
+
+This means the original document is searchable, but its memory-generation stage is still pending (which can include retries). It is not proof of an extraction failure or a bad source format. If both stages finish and the count remains zero, the service reports no derived memories for that document; not every exchange contains durable facts. The command shows no source text and modifies nothing. There is **no automatic progress polling** after every upload.
+
+Dynamic remains the default; no extra operation is silently added. For future runs you may explicitly choose:
+
+```text
+/supermemory capture mode instant  # confirms ONE EXTRA OPERATION per document
+/supermemory capture mode dynamic # return to grouped, delayed generation
+```
+
+Instant processes each document independently right away, but is still asynchronous and does not guarantee useful facts. A session mode change affects future runs only; pending retries retain their original mode and billing behavior. Modes reset on reload; `PI_SUPERMEMORY_CAPTURE_MODE=instant` is the explicit unattended/startup setting. Startup discloses its extra charge when selected.
+
+**Upgrade compatibility:** old JSON documents are not rewritten or re-uploaded. Old pending journals lacking format/mode fields reconstruct their exact original JSON bytes/ID and dynamic mode. New batches use readable v2 content. Retry is for unconfirmed uploads, not a way to force a new memory-generation pass on an already accepted document.
 
 ### Project identity
 
@@ -200,7 +224,7 @@ src/store.ts       validated official-SDK adapter
 src/identity.ts    local project identity
 src/config.ts      validated environment configuration
 src/auth/          OAuth lifecycle, validated private storage, optional env-key override
-src/capture/       delta selection, consent lifecycle, grant-bound journal, stable retries
+src/capture/       readable/versioned source, mode selection, stage diagnostics, grant-bound journal/retries
 ```
 
 ```bash
@@ -218,9 +242,9 @@ Tests cover strict typing, selection/bounds, Chinese prompts, project/worktree i
 
 OAuth tests also exercise the real `openid-client` library and real loopback HTTP callbacks with fixture authorization-server responses: state/issuer rejection, single-use callbacks, PKCE, refresh rotation, concurrent auth instances, cancellation, timeout, secure storage/reopen, revocation failures, malformed responses, and SDK bearer authentication.
 
-Default-on configuration and startup disclosure are tested, with persistent environment opt-out and an actual Pi run that captures without an enable flag/command. Capture tests also cover future-only windows, full-run private suppression and assistant echoes, failed/aborted/custom starts, source edits, bounded payloads, restart/retry, mismatched receipts, corrupt journals, branch/namespace/grant isolation, off/upload races, and actual competing processes. The end-to-end Pi test includes automatic capture after each complete answer and confirms that tool turns do not trigger extra captures.
+Readable formatting, exact legacy JSON/ID reconstruction, original-mode retry retention, stage parsing/zero-memory diagnostics, and extra-cost confirmation are tested. Default-on configuration and startup disclosure are tested, with persistent environment opt-out and an actual Pi run that captures without an enable flag/command. Capture tests also cover future-only windows, full-run private suppression and assistant echoes, failed/aborted/custom starts, source edits, bounded payloads, restart/retry, mismatched receipts, corrupt journals, branch/namespace/grant isolation, off/upload races, and actual competing processes. The end-to-end Pi test includes automatic capture after each complete answer and confirms that tool turns do not trigger extra captures.
 
-**Live checks completed:** official OAuth discovery/client registration; OAuth-authenticated synthetic capture and same-ID resubmission; disposable namespace cleanup checked via the newest namespace listing. A document-delete receipt during queued processing did not confirm deletion, so the entire random QA namespace was deleted and its absence checked instead.
+**Live checks completed:** official OAuth discovery/client registration; OAuth-authenticated synthetic capture and same-ID resubmission. A real existing capture was diagnosed as source `done` but memory stage `dreaming` (0 memories), then a later read showed memory stage `done` with 1 derived memory, matching the asynchronous dynamic-mode documentation. A new disposable readable capture was retrieved with User/Assistant sections and a non-JSON title/fallback; its namespace supporting context remained unset, and the new status adapter correctly reported both stages. The disposable namespace was deleted and a subsequent get returned 404. No real user document was rewritten. Earlier disposable namespace cleanup was checked via the newest namespace listing. A document-delete receipt during queued processing did not confirm deletion, so the entire random QA namespace was deleted and its absence checked instead.
 
 **Not yet tested:** automatic extraction quality/searchability after indexing, real model reasoning, a manual interactive TUI confirmation pass, or provider-side cache/billing metrics. These are pre-publication acceptance checks, not replaced by offline tests.
 

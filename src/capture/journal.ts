@@ -7,6 +7,7 @@ import { z } from "zod";
 import { hasCode } from "../auth/storage.js";
 import { receiptSchema, type Receipt } from "../memory.js";
 import { MAX_CAPTURE_SOURCE_ENTRIES, type CaptureBatch } from "./batch.js";
+import { captureFormatSchema, captureModeSchema } from "./types.js";
 
 const MAX_PENDING = 20;
 const MAX_BATCHES = 10_000;
@@ -14,18 +15,24 @@ const MAX_JOURNAL_BYTES = 8_000_000;
 const idSchema = z.string().regex(/^pi_capture_[a-f0-9]{64}$/);
 const pendingSchema = z.object({
   state: z.literal("pending"), id: idSchema,
+  format: captureFormatSchema.default("json-v1"), mode: captureModeSchema.default("dynamic"),
   digest: z.string().regex(/^[a-f0-9]{64}$/),
   sourceIds: z.array(z.string().min(1).max(256)).min(1).max(MAX_CAPTURE_SOURCE_ENTRIES),
 });
-const acceptedSchema = z.object({ state: z.literal("accepted"), id: idSchema, receipt: receiptSchema });
+const acceptedSchema = z.object({
+  state: z.literal("accepted"), id: idSchema, receipt: receiptSchema,
+  format: captureFormatSchema.default("json-v1"), mode: captureModeSchema.default("dynamic"),
+});
 const recordSchema = z.discriminatedUnion("state", [pendingSchema, acceptedSchema]);
 const journalSchema = z.object({
   version: z.literal(1), sessionId: z.string().min(1).max(256), namespace: z.string().min(1).max(128),
   batches: z.array(recordSchema).max(MAX_BATCHES),
 });
 export type PendingCapture = z.infer<typeof pendingSchema>;
+export type AcceptedCapture = z.infer<typeof acceptedSchema>;
 export interface CaptureRecords {
   pending(): PendingCapture[];
+  latestAccepted(): AcceptedCapture | undefined;
   prepare(batch: CaptureBatch): Promise<"pending" | "accepted">;
   accept(id: string, receipt: Receipt): Promise<void>;
   discardPending(): Promise<number>;
@@ -68,7 +75,7 @@ export class FileCaptureJournal implements CaptureJournal {
           const parsed = journalSchema.safeParse(raw);
           if (!parsed.success || parsed.data.sessionId !== sessionId || parsed.data.namespace !== namespace
             || new Set(parsed.data.batches.map(batch => batch.id)).size !== parsed.data.batches.length
-            || parsed.data.batches.some(batch => batch.state === "accepted" && batch.receipt.id !== batch.id)) {
+            || parsed.data.batches.some(batch => (batch.state === "accepted" && batch.receipt.id !== batch.id) || (batch.format === "json-v1" && batch.mode !== "dynamic"))) {
             throw new Error("Invalid capture journal identity/state; no data was sent.");
           }
           state = parsed.data;
@@ -97,15 +104,20 @@ export class FileCaptureJournal implements CaptureJournal {
           assertOwned();
           return state.batches.flatMap(batch => batch.state === "pending" ? [{ ...batch, sourceIds: [...batch.sourceIds] }] : []);
         },
+        latestAccepted: () => {
+          assertOwned();
+          const latest = state.batches.findLast(batch => batch.state === "accepted");
+          return latest?.state === "accepted" ? { ...latest, receipt: { ...latest.receipt } } : undefined;
+        },
         prepare: async batch => {
           assertOwned();
           const existing = state.batches.find(record => record.id === batch.id);
           if (existing) {
-            if (existing.state === "pending" && (existing.digest !== batch.digest || JSON.stringify(existing.sourceIds) !== JSON.stringify(batch.sourceIds))) throw new Error("Capture batch identity mismatch.");
+            if (existing.state === "pending" && (existing.digest !== batch.digest || existing.format !== batch.format || existing.mode !== batch.mode || JSON.stringify(existing.sourceIds) !== JSON.stringify(batch.sourceIds))) throw new Error("Capture batch identity mismatch.");
             return existing.state;
           }
           if (state.batches.length >= MAX_BATCHES || state.batches.filter(batch => batch.state === "pending").length >= MAX_PENDING) throw new Error("Capture journal is full; retry or discard pending batches first.");
-          const pending = pendingSchema.parse({ state: "pending", id: batch.id, digest: batch.digest, sourceIds: batch.sourceIds });
+          const pending = pendingSchema.parse({ state: "pending", id: batch.id, digest: batch.digest, sourceIds: batch.sourceIds, format: batch.format, mode: batch.mode });
           state.batches.push(pending);
           await save();
           return "pending";
@@ -114,8 +126,9 @@ export class FileCaptureJournal implements CaptureJournal {
           assertOwned();
           const parsed = receiptSchema.safeParse(receipt);
           const index = state.batches.findIndex(batch => batch.id === id);
-          if (!parsed.success || parsed.data.id !== id || index < 0) throw new Error("Capture acceptance does not match the pending document.");
-          state.batches[index] = { state: "accepted", id, receipt: parsed.data };
+          const existing = state.batches[index];
+          if (!parsed.success || parsed.data.id !== id || !existing) throw new Error("Capture acceptance does not match the pending document.");
+          state.batches[index] = { state: "accepted", id, receipt: parsed.data, format: existing.format, mode: existing.mode };
           await save();
         },
         discardPending: async () => {

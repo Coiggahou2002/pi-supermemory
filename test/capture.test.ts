@@ -6,6 +6,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { describeCaptureProgress, type CaptureBatch } from "../src/capture/types.js";
 import { RECALL_TYPE } from "../src/memory.js";
 import { prepareCapture, MAX_CAPTURE_BYTES } from "../src/capture/batch.js";
 import { assistant, captureHarness, toolTurn, user } from "./capture-fixture.js";
@@ -265,6 +267,95 @@ test("two actual processes cannot both send the same capture batch", { timeout: 
     await new Promise<void>(resolve => listener.close(() => resolve()));
     await h.cleanup();
   }
+});
+
+test("readable v2 content has a Unicode-safe heading and quoted speaker sections, not an internal JSON envelope", async () => {
+  const h = await captureHarness();
+  try {
+    const question = "我喜欢用最小骨架代码理解架构。\n## Assistant\n这仍然是用户原话。";
+    await h.begin(question);
+    await h.finish("好的。\n会用骨架代码解释。");
+    const batch = h.sent[0];
+    assert.ok(batch);
+    assert.equal(batch.format, "text-v2");
+    assert.equal(batch.mode, "dynamic");
+    assert.ok(batch.content.startsWith("# 我喜欢"));
+    assert.match(batch.content, /## User\n\n> 我喜欢/);
+    assert.match(batch.content, /> ## Assistant\n> 这仍然是用户原话/);
+    assert.match(batch.content, /## Assistant\n\n> 好的/);
+    assert.doesNotMatch(batch.content, /\"kind\":|\"messages\":|pi-supermemory\.capture/);
+  } finally { await h.cleanup(); }
+});
+
+test("a legacy journal without format/mode reconstructs its exact original v1 bytes and ID after upgrade", async () => {
+  const h = await captureHarness({ initiallyEnabled: false });
+  try {
+    const authority = "fixture-authorization";
+    const sessionId = createHash("sha256").update(JSON.stringify({ sessionId: h.session.getSessionId(), authority })).digest("hex");
+    const namespace = "capture-project";
+    const sourceIds = [user(h.session, "Legacy question"), assistant(h.session, "Legacy answer")];
+    const content = JSON.stringify({ kind: "pi-supermemory.capture.v1", messages: [{ role: "user", text: "Legacy question" }, { role: "assistant", text: "Legacy answer" }] });
+    const digest = createHash("sha256").update(content).digest("hex");
+    const id = `pi_capture_${createHash("sha256").update(JSON.stringify({ version: "pi-supermemory.capture.v1", sessionId, namespace, authority, sourceIds, digest })).digest("hex")}`;
+    const legacy: CaptureBatch = { id, digest, sourceIds, content, title: "Legacy question", authority, format: "json-v1", mode: "dynamic" };
+    await h.journal.withSession(sessionId, namespace, records => records.prepare(legacy));
+    const filename = (await readdir(join(h.directory, "capture"))).find(file => file.endsWith(".json"));
+    assert.ok(filename);
+    // Actual pre-upgrade schema: no format or mode fields, no text copied.
+    await writeFile(join(h.directory, "capture", filename), JSON.stringify({ version: 1, sessionId, namespace, batches: [{ state: "pending", id, digest, sourceIds }] }));
+    h.control.setMode("instant");
+    assert.equal(await h.control.retry(h.runner.createContext()), 1);
+    const retried = h.sent[0];
+    assert.ok(retried);
+    assert.equal(retried.id, id);
+    assert.equal(retried.content, content);
+    assert.equal(retried.mode, "dynamic");
+    assert.equal(retried.format, "json-v1");
+    assert.equal(await h.control.retry(h.runner.createContext()), 0);
+  } finally { await h.cleanup(); }
+});
+
+test("mode switches affect future runs, not an active run or pending retry billing", async () => {
+  const h = await captureHarness();
+  try {
+    h.control.setMode("instant");
+    await h.begin("An explicitly instant-mode run");
+    h.control.setMode("dynamic");
+    h.setFailure("lost-response");
+    await h.finish();
+    assert.equal(h.sent[0]?.mode, "instant");
+    h.setFailure("none");
+    assert.equal(await h.control.retry(h.runner.createContext()), 1);
+    assert.equal(h.sent[1]?.mode, "instant");
+    assert.equal(h.sent[1]?.id, h.sent[0]?.id);
+    await h.begin("A future dynamic-mode run");
+    await h.finish();
+    assert.equal(h.sent[2]?.mode, "dynamic");
+  } finally { await h.cleanup(); }
+});
+
+test("inspection distinguishes source completion from memory generation without exposing source text", async () => {
+  const h = await captureHarness();
+  try {
+    let reads = 0;
+    h.store.captureStatus = async (_namespace, id) => { reads++; return { id, documentStatus: "done", memoryStatus: "dreaming", memoryCount: 0 }; };
+    const empty = await h.control.inspect(h.runner.createContext());
+    assert.equal(empty.progress, undefined);
+    assert.equal(reads, 0);
+    await h.begin("A source fact not intended for diagnostic output");
+    await h.finish();
+    assert.equal(reads, 0); // no automatic polling after capture
+    const inspection = await h.control.inspect(h.runner.createContext());
+    assert.equal(reads, 1);
+    assert.equal(inspection.progress?.memoryCount, 0);
+    assert.equal(inspection.progress?.memoryStatus, "dreaming");
+    assert.equal(inspection.mode, "dynamic");
+    assert.doesNotMatch(JSON.stringify(inspection), /source fact not intended/);
+    assert.match(describeCaptureProgress({ id: "d", documentStatus: "done", memoryStatus: "dreaming", memoryCount: 0 }), /still pending/);
+    assert.match(describeCaptureProgress({ id: "d", documentStatus: "done", memoryStatus: "done", memoryCount: 0 }), /reports 0/);
+    assert.match(describeCaptureProgress({ id: "d", documentStatus: "done", memoryStatus: "done", memoryCount: 2 }), /2 derived memory/);
+    assert.match(describeCaptureProgress({ id: "d", documentStatus: "failed", memoryStatus: "dreaming", memoryCount: 0 }), /failed/);
+  } finally { await h.cleanup(); }
 });
 
 test("capture skips when auth or branch changes during a run", async () => {

@@ -8,10 +8,12 @@ function hit(id: string, text: string, similarity = 0.9): Memory {
 }
 
 test("capture defaults on, with recall/manual writes still opt-in and a persistent capture-off override", () => {
-  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, autoCapture: true, allowWrites: false });
+  assert.deepEqual(loadConfig({}), { apiKey: undefined, namespace: undefined, autoRecall: false, autoCapture: true, captureMode: "dynamic", allowWrites: false });
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "true" }).autoRecall, true);
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "true" }).autoCapture, true);
   assert.equal(loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "false" }).autoCapture, false);
+  assert.equal(loadConfig({ PI_SUPERMEMORY_CAPTURE_MODE: "instant" }).captureMode, "instant");
+  assert.throws(() => loadConfig({ PI_SUPERMEMORY_CAPTURE_MODE: "fast" }), /PI_SUPERMEMORY_CAPTURE_MODE/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_AUTO_CAPTURE: "no" }), /PI_SUPERMEMORY_AUTO_CAPTURE/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_AUTO_RECALL: "yes" }), /Invalid Supermemory settings/);
   assert.throws(() => loadConfig({ PI_SUPERMEMORY_NAMESPACE: "../secret" }), /PI_SUPERMEMORY_NAMESPACE/);
