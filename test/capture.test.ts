@@ -311,6 +311,8 @@ test("a legacy journal without format/mode reconstructs its exact original v1 by
     assert.equal(retried.content, content);
     assert.equal(retried.mode, "dynamic");
     assert.equal(retried.format, "json-v1");
+    const written: unknown = JSON.parse(await readFile(join(h.directory, "capture", filename), "utf8"));
+    assert.equal(z.object({ version: z.literal(2) }).parse(written).version, 2);
     assert.equal(await h.control.retry(h.runner.createContext()), 0);
   } finally { await h.cleanup(); }
 });
