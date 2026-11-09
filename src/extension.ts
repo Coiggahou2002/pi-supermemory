@@ -168,6 +168,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
           ? `Latest accepted capture for this session/namespace/login: ${progress.id}\nSource=${progress.documentStatus}; memory generation=${progress.memoryStatus}; derived memories=${progress.memoryCount}; submitted mode=${inspection.mode}.\n${describeCaptureProgress(progress, inspection.mode ?? capture.mode())}\nUnconfirmed batches=${inspection.pending}. Current mode for future runs=${capture.mode()}.`
           : `No accepted captures for this session/namespace/login yet. Unconfirmed batches=${inspection.pending}.`;
         if (ctx.hasUI) ctx.ui.notify(message, progress?.documentStatus === "failed" ? "warning" : "info"); else console.error(message);
+        return; // Keep the requested diagnostics visible instead of replacing them with generic status.
       } else if (action === "capture mode dynamic" || action === "capture mode instant") {
         await ctx.waitForIdle();
         const next = action === "capture mode instant" ? "instant" : "dynamic";
