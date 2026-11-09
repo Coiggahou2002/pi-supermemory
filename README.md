@@ -148,7 +148,7 @@ Dynamic remains the default; no extra operation is silently added. For future ru
 
 Instant processes each document independently right away, but is still asynchronous and does not guarantee useful facts. A session mode change affects future runs only; pending retries retain their original mode and billing behavior. Modes reset on reload; `PI_SUPERMEMORY_CAPTURE_MODE=instant` is the explicit unattended/startup setting. Startup discloses its extra charge when selected.
 
-**Upgrade compatibility:** old JSON documents are not rewritten or re-uploaded. Old pending journals lacking format/mode fields reconstruct their exact original JSON bytes/ID and dynamic mode. New batches use readable v2 content. Retry is for unconfirmed uploads, not a way to force a new memory-generation pass on an already accepted document.
+**Upgrade compatibility:** old JSON documents are not rewritten or re-uploaded. Old pending journals lacking format/mode fields reconstruct their exact original JSON bytes/ID and dynamic mode. New batches use readable v2 content. Journal v1 is read compatibly; subsequent writes use journal v2 so older plugins fail closed rather than erase format/mode metadata. Do not downgrade while v2 pending work remains if you need those retries. Retry is for unconfirmed uploads, not a way to force a new memory-generation pass on an already accepted document.
 
 ### Project identity
 

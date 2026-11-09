@@ -283,6 +283,19 @@ test("instant mode requires a separate extra-cost confirmation and dynamic remai
   } finally { await h.cleanup(); }
 });
 
+test("capture diagnostics remain the final visible notification instead of being replaced by generic status", async () => {
+  const h = await harness();
+  try {
+    const notices: string[] = [];
+    h.runner.setUIContext({ ...h.runner.getUIContext(), notify: message => { notices.push(message); } }, "tui");
+    const command = h.runner.getCommand("supermemory"); assert.ok(command);
+    const ctx = h.runner.createCommandContext(); ctx.waitForIdle = async () => {};
+    await command.handler("capture status", ctx);
+    assert.equal(notices.length, 1);
+    assert.match(notices.at(-1) ?? "", /No accepted captures/);
+  } finally { await h.cleanup(); }
+});
+
 test("default-on capture gives a prominent startup disclosure before any user message", async () => {
   const h = await harness(false, false, true, loadConfig({}).autoCapture);
   const notices: string[] = [];

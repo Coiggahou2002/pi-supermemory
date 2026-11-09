@@ -25,7 +25,7 @@ const acceptedSchema = z.object({
 });
 const recordSchema = z.discriminatedUnion("state", [pendingSchema, acceptedSchema]);
 const journalSchema = z.object({
-  version: z.literal(1), sessionId: z.string().min(1).max(256), namespace: z.string().min(1).max(128),
+  version: z.union([z.literal(1), z.literal(2)]), sessionId: z.string().min(1).max(256), namespace: z.string().min(1).max(128),
   batches: z.array(recordSchema).max(MAX_BATCHES),
 });
 export type PendingCapture = z.infer<typeof pendingSchema>;
@@ -61,7 +61,7 @@ export class FileCaptureJournal implements CaptureJournal {
     });
     const assertOwned = () => { if (compromised) throw new Error("Capture journal lock was lost."); };
     try {
-      let state: z.infer<typeof journalSchema> = { version: 1, sessionId, namespace, batches: [] };
+      let state: z.infer<typeof journalSchema> = { version: 2, sessionId, namespace, batches: [] };
       let file;
       try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
       catch (error) { if (!hasCode(error, "ENOENT")) throw new Error("Cannot open capture journal."); }
@@ -83,6 +83,9 @@ export class FileCaptureJournal implements CaptureJournal {
       }
       const save = async () => {
         assertOwned();
+        // Old plugins reject v2 instead of stripping format/mode fields and
+        // making pending v2 uploads impossible to reconstruct after downgrade.
+        state.version = 2;
         const serialized = JSON.stringify(state);
         if (Buffer.byteLength(serialized) > MAX_JOURNAL_BYTES) throw new Error("Capture journal is full.");
         const temporary = join(this.directory, `.capture-${randomUUID()}.tmp`);
