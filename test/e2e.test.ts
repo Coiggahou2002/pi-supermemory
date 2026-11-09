@@ -49,21 +49,31 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
   let searchCalls = 0;
   let saves = 0;
   let captures = 0;
+  let inspections = 0;
   const oauthServer = new OAuthFixture();
   const transport: typeof fetch = async (input, init) => {
     if (!String(input).includes("/ns/")) return oauthServer.transport(input, init);
     assert.equal(new Headers(init?.headers).get("authorization"), "Bearer access-1");
+    if (init?.method === "GET") {
+      inspections++;
+      const url = new URL(String(input));
+      const id = url.pathname.split("/").at(-1);
+      assert.equal(url.searchParams.get("include"), "memories");
+      return Response.json({ id, system: { status: "done", dreamingStatus: "dreaming" }, memories: [] });
+    }
     if (String(input).endsWith("/search")) {
       searchCalls++;
       return Response.json({ results: [{ id: "fact", memory: "Prefer minimal skeleton code", similarity: 0.9, isLatest: true }] });
     }
     assert.ok(String(input).endsWith("/document"));
     const raw: unknown = JSON.parse(String(init?.body));
-    const capture = z.object({ id: z.string(), content: z.string(), supportingContext: z.string() }).safeParse(raw);
+    const capture = z.object({ id: z.string(), content: z.string(), dreaming: z.literal("dynamic"), metadata: z.object({ title: z.string(), capture_format: z.literal("text-v2") }) }).safeParse(raw);
     if (capture.success) {
       captures++;
       assert.doesNotMatch(capture.data.content, /fixture-token|tool_call_id|supermemory_memory_policy|\"role\":\"system\"/);
-      assert.match(capture.data.supportingContext, /durable user-stated/);
+      assert.ok(capture.data.content.startsWith("# "));
+      assert.match(capture.data.content, /## User/);
+      assert.doesNotMatch(String(init?.body), /supportingContext/);
       return Response.json({ id: capture.data.id, status: "queued" });
     }
     assert.match(String(init?.body), /Prefer small typed functions/);
@@ -120,7 +130,11 @@ test("offline E2E: OAuth browser callback → real Pi session → model HTTP →
     await session.prompt("What was the design decision from our earlier discussion?");
     assert.equal(requests.length, 4);
     assert.equal(manager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === RECALL_TYPE).length, 1);
+    assert.equal(inspections, 0); // no automatic status polling per captured turn
     await session.prompt("/supermemory status");
+    assert.equal(inspections, 0);
+    await session.prompt("/supermemory capture status");
+    assert.equal(inspections, 1);
     await session.prompt("/supermemory logout");
     assert.equal(requests.length, 4); // slash commands do not call the model
     assert.equal(captures, 2); // each complete run, not every model/tool turn

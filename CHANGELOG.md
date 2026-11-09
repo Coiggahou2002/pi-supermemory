@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-11-08
+
+- Captured conversations are now readable documents with a short heading and User/Assistant sections instead of an internal JSON envelope. Old pending uploads retain their exact original format and IDs.
+- `/supermemory capture status` distinguishes source searchability, pending memory generation, and derived-memory count, without displaying source text.
+- Optional `/supermemory capture mode instant` offers independent immediate processing after confirmation of one extra operation per document. Dynamic remains the default; retries retain their original mode.
+- Capture no longer overwrites namespace-wide supporting context on each upload; existing remote content/settings are not rewritten automatically.
+
 ## 0.4.0 — 2026-11-08
 
 - Automatic capture is now on by default after sign-in: new completed exchanges are submitted for memory extraction without an extra enable command.

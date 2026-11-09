@@ -10,6 +10,7 @@ import { CredentialStorage } from "../src/auth/storage.js";
 import { OAuthAuthentication } from "../src/auth/oauth.js";
 import { createAuthentication } from "../src/auth/index.js";
 import { createSupermemoryStore } from "../src/store.js";
+import type { CaptureBatch } from "../src/capture/types.js";
 import { OAuthFixture } from "./oauth-fixture.js";
 
 async function fixture(timeout = 5000) {
@@ -359,7 +360,7 @@ test("capture credentials remain bound across refresh, but cannot follow a diffe
       requests++;
       return Response.json({ id: `pi_capture_${"a".repeat(64)}`, status: "queued" });
     });
-    const batch = { id: `pi_capture_${"a".repeat(64)}`, digest: "b".repeat(64), sourceIds: ["entry"], content: "fixture content", authority: identity };
+    const batch: CaptureBatch = { id: `pi_capture_${"a".repeat(64)}`, digest: "b".repeat(64), sourceIds: ["entry"], content: "fixture content", authority: identity, title: "Fixture", format: "text-v2", mode: "dynamic" };
     await store.capture("fixture", batch);
     const saved = await f.storage.read();
     assert.ok(saved);

@@ -46,6 +46,7 @@ export async function captureHarness(options: { initiallyEnabled?: boolean; dire
   const store: MemoryStore = {
     async search() { return []; },
     async remember() { return { id: "manual", status: "queued" }; },
+    async captureStatus(_namespace, id) { return { id, documentStatus: "done", memoryStatus: "dreaming", memoryCount: 0 }; },
     async capture(_namespace, batch, signal) {
       signal?.throwIfAborted();
       sent.push(batch);

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FileCaptureJournal } from "../src/capture/journal.js";
 import { createSupermemoryStore } from "../src/store.js";
+import type { CaptureBatch } from "../src/capture/types.js";
 
 const [directory, origin] = z.tuple([z.string().min(1), z.string().url()]).parse(process.argv.slice(2));
 const local = new URL(origin);
@@ -13,7 +14,7 @@ const transport: typeof fetch = (input, init) => {
 };
 const content = "Synthetic capture journal contention test; not a real user fact.";
 const digest = createHash("sha256").update(content).digest("hex");
-const batch = { id: `pi_capture_${digest}`, digest, sourceIds: ["entry-1", "entry-2"], content, authority: "fixture" };
+const batch: CaptureBatch = { id: `pi_capture_${digest}`, digest, sourceIds: ["entry-1", "entry-2"], content, authority: "fixture", title: "Capture journal fixture", format: "text-v2", mode: "dynamic" };
 const journal = new FileCaptureJournal(directory);
 const store = createSupermemoryStore("fixture-token", transport);
 await journal.withSession("fixture-session", "fixture-project", async records => {

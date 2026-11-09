@@ -5,6 +5,7 @@ import { AuthenticationRequired, type Authentication } from "./auth/index.js";
 import type { Config } from "./config.js";
 import { registerCapture } from "./capture/runtime.js";
 import type { CaptureJournal } from "./capture/journal.js";
+import { describeCaptureProgress } from "./capture/types.js";
 import { presentMemoryKeys } from "./context.js";
 import {
   containsPrivateMarker, formatMemories, MAX_QUERY_CHARS, MAX_SAVE_CHARS,
@@ -149,17 +150,40 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
   const capture = registerCapture(pi, {
     store: deps.store, auth: deps.auth, journal: deps.captureJournal,
     namespace: cwd => deps.namespace(cwd, deps.config.namespace),
-  }, deps.config.autoCapture);
+  }, deps.config.autoCapture, deps.config.captureMode);
   pi.registerCommand("supermemory", {
-    description: "Supermemory login/logout/status; recall on|off; capture on|off|retry|discard",
+    description: "Supermemory login/logout/status; recall on|off; capture on|off|retry|discard|status; capture mode dynamic|instant",
+    getArgumentCompletions: prefix => {
+      const commands = ["login", "logout", "status", "on", "off", "capture on", "capture off", "capture retry", "capture discard", "capture status", "capture mode dynamic", "capture mode instant"];
+      const matches = commands.filter(value => value.startsWith(prefix)).map(value => ({ value, label: value }));
+      return matches.length ? matches : null;
+    },
     handler: async (args, ctx) => {
       const action = args.trim() || "status";
-      if (action === "capture on") {
+      if (action === "capture status") {
+        await ctx.waitForIdle();
+        const inspection = await capture.inspect(ctx);
+        const progress = inspection.progress;
+        const message = progress
+          ? `Latest accepted capture for this session/namespace/login: ${progress.id}\nSource=${progress.documentStatus}; memory generation=${progress.memoryStatus}; derived memories=${progress.memoryCount}; submitted mode=${inspection.mode}.\n${describeCaptureProgress(progress, inspection.mode ?? capture.mode())}\nUnconfirmed batches=${inspection.pending}. Current mode for future runs=${capture.mode()}.`
+          : `No accepted captures for this session/namespace/login yet. Unconfirmed batches=${inspection.pending}.`;
+        if (ctx.hasUI) ctx.ui.notify(message, progress?.documentStatus === "failed" ? "warning" : "info"); else console.error(message);
+      } else if (action === "capture mode dynamic" || action === "capture mode instant") {
+        await ctx.waitForIdle();
+        const next = action === "capture mode instant" ? "instant" : "dynamic";
+        if (next === "instant" && capture.mode() !== "instant") {
+          if (!ctx.hasUI) throw new Error("Instant mode costs one extra operation per document. For unattended use explicitly set PI_SUPERMEMORY_CAPTURE_MODE=instant before starting Pi.");
+          if (!await ctx.ui.confirm("Use instant memory generation?", "Supermemory processes each new document independently right away in instant mode, billing ONE EXTRA OPERATION per captured document. It still processes asynchronously and may produce no facts. This affects future runs only; pending retries retain their original mode. Continue?")) return;
+        }
+        capture.setMode(next);
+        const message = next === "instant" ? "Future captures use instant mode (one extra operation per document)." : "Future captures use dynamic mode (memory generation may take several minutes).";
+        if (ctx.hasUI) ctx.ui.notify(message, "info"); else console.error(message);
+      } else if (action === "capture on") {
         requireStore(deps);
         if ((await deps.auth.status()).kind === "signed-out") throw new AuthenticationRequired();
         if (!ctx.hasUI) throw new Error("Re-enabling capture needs interactive confirmation. For unattended use set PI_SUPERMEMORY_AUTO_CAPTURE=true before starting Pi.");
         await ctx.waitForIdle();
-        const approved = await ctx.ui.confirm("Enable automatic conversation capture?", "Future user text and completed assistant answer text in this session will be sent to Supermemory automatically for memory extraction, without asking on every turn. This may incur service charges. Runs containing <private> markers are skipped; this is not secret detection. Old history, tools, thinking, images, system prompts and recalled memories are not uploaded. Enable?");
+        const approved = await ctx.ui.confirm("Enable automatic conversation capture?", `Future user text and completed assistant answer text in this session will be sent to Supermemory automatically for memory extraction, without asking on every turn. This may incur service charges. ${capture.mode() === "instant" ? "Current mode is instant: ONE EXTRA OPERATION per document." : "Current mode is dynamic: memory generation may take several minutes."} Runs containing <private> markers are skipped; this is not secret detection. Old history, tools, thinking, images, system prompts and recalled memories are not uploaded. Enable?`);
         if (!approved) return;
         capture.enable();
         ctx.ui.setStatus("supermemory-capture", "Capture: on");
@@ -173,7 +197,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
           if (!await ctx.ui.confirm("Retry pending captures?", "Resend up to 5 unconfirmed batches from this session's active branch, namespace and current authorization grant using their original document IDs. This can incur charges even if a previous response was lost. No other history will be sent. Continue?")) return;
         } // In headless mode the explicit retry command authorizes this resend.
         const count = await capture.retry(ctx);
-        const message = `Capture retry: ${count} batch(es) accepted. Up to 5 are processed per attempt; repeat the command if more remain. Indexing may still be pending.`;
+        const message = `Capture retry: ${count} batch(es) accepted. Up to 5 are processed per attempt; repeat the command if more remain. Memory generation may still be pending; use /supermemory capture status.`;
         if (ctx.hasUI) ctx.ui.notify(message, "info"); else console.error(message);
       } else if (action === "capture discard") {
         await ctx.waitForIdle();
@@ -209,12 +233,12 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
       } else if (action === "off") {
         autoRecall = false;
       } else if (action !== "status") {
-        ctx.ui.notify("Usage: /supermemory [login|logout|status|on|off|capture on|capture off|capture retry|capture discard]", "warning");
+        ctx.ui.notify("Usage: /supermemory [login|logout|status|on|off|capture on|capture off|capture retry|capture discard|capture status|capture mode dynamic|capture mode instant]", "warning");
         return;
       }
       const namespace = await deps.namespace(ctx.cwd, deps.config.namespace);
       const status = await deps.auth.status();
-      const text = `Supermemory: ${status.kind === "oauth" ? "OAuth signed in" : status.kind === "api-key" ? "environment API key (overrides OAuth)" : "signed out — /supermemory login"}; namespace=${namespace}; auto recall=${autoRecall ? "on (eligible prompt text is sent remotely)" : "off"}; default remember destination=Supermemory; automatic capture=${capture.enabled() ? "on (future conversation text is sent remotely)" : "off"}. Toggles reset on /reload.`;
+      const text = `Supermemory: ${status.kind === "oauth" ? "OAuth signed in" : status.kind === "api-key" ? "environment API key (overrides OAuth)" : "signed out — /supermemory login"}; namespace=${namespace}; auto recall=${autoRecall ? "on (eligible prompt text is sent remotely)" : "off"}; default remember destination=Supermemory; automatic capture=${capture.enabled() ? "on (future conversation text is sent remotely)" : "off"}; capture mode=${capture.mode()}. Use /supermemory capture status to inspect extraction. Toggles reset on /reload.`;
       if (ctx.hasUI) ctx.ui.setStatus("supermemory", status.kind === "signed-out" ? "Memory: sign in" : `Memory: ${autoRecall ? "auto" : "manual"}`);
       if (ctx.hasUI) ctx.ui.notify(text, "info");
       else console.error(text);
@@ -227,7 +251,7 @@ export function registerExtension(pi: ExtensionAPI, deps: Dependencies): void {
       ctx.ui.setStatus("supermemory-capture", capture.enabled() ? "Capture: on" : undefined);
     }
     if (capture.enabled()) {
-      const notice = `Automatic memory capture is ON${status.kind === "signed-out" ? " after sign-in" : ""}: new user text and final answers will be sent to Supermemory for extraction (charges may apply). Private-marked runs are skipped; this is not secret detection. /supermemory capture off stops this session; PI_SUPERMEMORY_AUTO_CAPTURE=false keeps it off across restarts.`;
+      const notice = `Automatic memory capture is ON${status.kind === "signed-out" ? " after sign-in" : ""}: new user text and final answers will be sent to Supermemory for extraction (charges may apply). Private-marked runs are skipped; this is not secret detection. ${capture.mode() === "instant" ? "Instant mode adds one extra operation per document." : "Dynamic memory generation may take several minutes."} /supermemory capture off stops this session; PI_SUPERMEMORY_AUTO_CAPTURE=false keeps it off across restarts.`;
       if (ctx.hasUI) ctx.ui.notify(notice, "warning"); else console.error(notice);
     }
   });
